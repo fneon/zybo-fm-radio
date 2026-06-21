@@ -1,0 +1,21 @@
+# Vivado generated files
+zybo-fm-radio.cache/
+zybo-fm-radio.hw/
+zybo-fm-radio.ip_user_files/
+zybo-fm-radio.runs/
+zybo-fm-radio.sim/
+zybo-fm-radio.gen/
+zybo-fm-radio.Xil/
+
+# Logs
+*.log
+*.jou
+*.str
+
+# Temporary files
+*.tmp
+
+# Bitstreams and reports (optional)
+*.bit
+*.bin
+*.rpt
