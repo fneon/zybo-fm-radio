@@ -38,12 +38,11 @@ IBUFG sysclk_ibuf (
     .O(sysclk_buf)
 );
 
-wire mm_clk;
 clk_wiz_0 instance_clk_wiz_0 (
         .clk_in1(sysclk_buf),
-        .clk_out1(mm_clk) // Connects output to your internal clock wire mesh
+        .clk_out1(je[3]),
+        .clk_out2(je[2])
     );
-assign je[3] = mm_clk;
 
 /*
 wire mm_station;
@@ -53,6 +52,7 @@ clk_station instance_clk_station (
     );
 assign je[2] = mm_station;*/
 
+/*
 // Map the 0..4 level onto PWM duty: 0 -> 0%, 4 -> 50%.
 // duty = level * 32  ->  0, 32, 64, 96, 128 (128/256 = 50%).
 wire [8:0] level_duty = {level, 5'b00000};
@@ -106,7 +106,7 @@ led_bar level_display (
     .value (level),
     .led   (led)
 );
-
+*/
 endmodule
 
 module pwm (
