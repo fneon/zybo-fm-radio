@@ -22,8 +22,8 @@
 
 module LO(
     input sysclk,
-    //input mm_clk,
     input  [3:0] btn,   // btn[0] = increment level, btn[1] = decrement level
+    input  vauxp14, vauxn14,
     output [3:0] led,   // shows current level on the user LEDs
     output [3:1] je
     );
@@ -43,6 +43,83 @@ clk_wiz_0 instance_clk_wiz_0 (
         .clk_out1(je[3]),
         .clk_out2(je[2])
     );
+    
+
+wire xadc_eoc, xadc_drdy;
+wire [15:0] xadc_do;
+xadc_wiz_0 instance_xadc (
+        .dclk_in(sysclk_buf),
+        .vauxp14(vauxp14),
+        .vauxn14(vauxn14),
+        .eoc_out(xadc_eoc),
+        .daddr_in(7'h1e),
+        .den_in(xadc_eoc),
+        .drdy_out(xadc_drdy),
+        .do_out(xadc_do)
+    );
+
+/*
+blk_mem_gen_0 instance_bram (
+        .addra(mem_addr),
+        .clka(sysclk_buf),
+        .dina(mem_data),
+        //.douta(15:0),
+        .ena(1),
+        .wea(do_write)
+    );
+    
+ reg [17:0] mem_addr = 0;
+ reg write_done = 0;
+ reg [15:0] mem_data;
+ reg do_write = 0;
+
+always @(posedge sysclk_buf) begin : p1
+    if (write_done) disable p1;
+    mem_data <= mem_addr[15:0];
+    mem_addr <= mem_addr + 1;
+    do_write <= 1;
+    if (mem_addr == 18'h3FFFF) begin
+        write_done <= 1;
+        do_write <= 0;
+    end
+end
+*/
+
+(* ram_style = "block" *) reg [15:0] inferred_ram[0:262143];
+reg [17:0] mem_addr = 0;
+reg write_done = 0;
+reg [15:0] ram_dout;
+
+/*
+always @(posedge sysclk_buf) begin : p1
+    if (write_done) disable p1;
+    inferred_ram[mem_addr] <= mem_addr[15:0];
+    // Read port keeps the RAM from being optimized away; like the write it
+    // stops after write_done, so the BRAM is idle during config readback.
+    ram_dout <= inferred_ram[mem_addr];
+    mem_addr <= mem_addr + 1;
+    if (mem_addr == 18'h3FFFF) begin
+        write_done <= 1;
+    end
+end
+*/
+always @(posedge sysclk_buf) begin : p1
+    if (write_done || (!xadc_drdy)) disable p1;
+    inferred_ram[mem_addr] <= xadc_do;
+    // Read port keeps the RAM from being optimized away; like the write it
+    // stops after write_done, so the BRAM is idle during config readback.
+    ram_dout <= inferred_ram[mem_addr];
+    mem_addr <= mem_addr + 1;
+    if (mem_addr == 18'h3FFFF) begin
+        write_done <= 1;
+    end
+end
+
+
+assign led[0] = write_done;
+assign led[1] = ^ram_dout;
+assign led[3:2] = 2'b00;
+
 
 /*
 wire mm_station;
