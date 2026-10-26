@@ -47,6 +47,7 @@ clk_wiz_0 instance_clk_wiz_0 (
 
 wire xadc_eoc, xadc_drdy;
 wire [15:0] xadc_do;
+wire signed [16:0] xadc_signed = {1'b0, xadc_do};
 xadc_wiz_0 instance_xadc (
         .dclk_in(sysclk_buf),
         .vauxp14(vauxp14),
@@ -57,6 +58,24 @@ xadc_wiz_0 instance_xadc (
         .drdy_out(xadc_drdy),
         .do_out(xadc_do)
     );
+
+wire signed [15:0] dds_cos, dds_msin;
+dds_compiler_0 inst_dds (
+    .aclk(xadc_eoc),
+    .m_axis_data_tdata({dds_msin, dds_cos})
+);
+
+wire        fir_valid;
+wire [39:0] fir_tdata;
+fir_compiler_0 inst_fir_25k195k (
+    .aclk(sysclk_buf),
+    .s_axis_data_tvalid(xadc_drdy),          // one new sample per XADC read
+    .s_axis_data_tready(),
+    .s_axis_data_tdata(xadc_signed[16:1]),
+    .m_axis_data_tvalid(fir_valid),
+    .m_axis_data_tdata(fir_tdata)
+);
+wire signed [15:0] filter_out = fir_tdata[31:16];
 
 /*
 blk_mem_gen_0 instance_bram (
@@ -103,9 +122,11 @@ always @(posedge sysclk_buf) begin : p1
     end
 end
 */
+reg signed [40:0] mul_res;
 always @(posedge sysclk_buf) begin : p1
-    if (write_done || (!xadc_drdy)) disable p1;
-    inferred_ram[mem_addr] <= xadc_do;
+    if (write_done || (!fir_valid)) disable p1;
+    mul_res <= dds_cos *  filter_out;
+    inferred_ram[mem_addr] <= filter_out;//xadc_signed[16:1];//mul_res[40:40-15];
     // Read port keeps the RAM from being optimized away; like the write it
     // stops after write_done, so the BRAM is idle during config readback.
     ram_dout <= inferred_ram[mem_addr];
