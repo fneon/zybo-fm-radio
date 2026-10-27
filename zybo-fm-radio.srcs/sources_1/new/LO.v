@@ -59,6 +59,17 @@ xadc_wiz_0 instance_xadc (
         .do_out(xadc_do)
     );
 
+wire signed [15:0] dc_out;
+wire dc_ready;
+dc_filter inst_dc_filter(
+    .clk(sysclk_buf),
+    .in_valid(xadc_drdy),
+    .x0(xadc_signed[16:1]),
+    .y1(dc_out),
+    .dc_ready(dc_ready)
+);
+
+
 wire signed [15:0] dds_cos, dds_msin;
 dds_compiler_0 inst_dds (
     .aclk(xadc_eoc),
@@ -68,7 +79,7 @@ dds_compiler_0 inst_dds (
 wire        fir_valid;
 wire [39:0] fir_tdata;
 fir_compiler_0 inst_fir_25k195k (
-    .aclk(sysclk_buf),
+    .aclk(sysclk_buf),                       // TODO: need 1000s clocks per sample. replace with another type of filter
     .s_axis_data_tvalid(xadc_drdy),          // one new sample per XADC read
     .s_axis_data_tready(),
     .s_axis_data_tdata(xadc_signed[16:1]),
@@ -124,9 +135,10 @@ end
 */
 reg signed [40:0] mul_res;
 always @(posedge sysclk_buf) begin : p1
-    if (write_done || (!fir_valid)) disable p1;
+    //if (write_done || (!fir_valid)) disable p1;
+    if (write_done || (!dc_ready)) disable p1;
     mul_res <= dds_cos *  filter_out;
-    inferred_ram[mem_addr] <= filter_out;//xadc_signed[16:1];//mul_res[40:40-15];
+    inferred_ram[mem_addr] <= dc_out;//filter_out;//xadc_signed[16:1];//mul_res[40:40-15];
     // Read port keeps the RAM from being optimized away; like the write it
     // stops after write_done, so the BRAM is idle during config readback.
     ram_dout <= inferred_ram[mem_addr];

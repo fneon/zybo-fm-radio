@@ -20,6 +20,12 @@ set out_dir    [file join $repo_dir output]
 
 open_project $xpr
 
+# Drop outputs of the previous build so a failed build cannot leave a stale
+# BRAM map next to a fresh .ll (bram_dump.bat would then decode garbage).
+foreach f {LO.bit LO.ll LO.ll.bram_cache LO_bram_map.csv} {
+    file delete -force [file join $out_dir $f]
+}
+
 # Make sure IP cores (clk_wiz_0, clk_station) are current and have output products.
 set ips [get_ips -quiet]
 if {[llength $ips] > 0} {
