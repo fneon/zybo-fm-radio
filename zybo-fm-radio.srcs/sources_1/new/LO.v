@@ -72,21 +72,61 @@ dc_filter inst_dc_filter(
 
 wire signed [15:0] dds_cos, dds_msin;
 dds_compiler_0 inst_dds (
-    .aclk(xadc_eoc),
+    .aclk(xadc_eoc),                        // TODO: what is aclk? (why "a")
     .m_axis_data_tdata({dds_msin, dds_cos})
 );
 
-wire        fir_valid;
-wire [39:0] fir_tdata;
-fir_compiler_0 inst_fir_25k195k (
-    .aclk(sysclk_buf),                       // TODO: need 1000s clocks per sample. replace with another type of filter
-    .s_axis_data_tvalid(xadc_drdy),          // one new sample per XADC read
-    .s_axis_data_tready(),
-    .s_axis_data_tdata(xadc_signed[16:1]),
-    .m_axis_data_tvalid(fir_valid),
-    .m_axis_data_tdata(fir_tdata)
+/*
+wire signed [31:0] long_i = dds_cos  *  dc_out;  //[31:31-15];
+wire signed [31:0] long_q = dds_msin *  dc_out;  //[31:31-15];
+wire signed [15:0] si = long_i[31:31-15];
+wire signed [15:0] sq = long_q[31:31-15];
+*/
+
+wire signed [15:0] si;
+wire signed [15:0] sq;
+wire iq_ready;
+make_iq inst_make_iq (
+    .clk(sysclk_buf),
+    .in_valid(dc_ready),
+    .in_signal(dc_out),
+    .in_cos(dds_cos),
+    .in_msin(dds_msin),
+    .out_i(si),
+    .out_q(sq),
+    .out_ready(iq_ready)
 );
-wire signed [15:0] filter_out = fir_tdata[31:16];
+
+wire [73:0] fir_out;
+wire signed [15:0] fsq = fir_out[40+17+15:40+17]; //73:40
+wire signed [15:0] fsi = fir_out[17+15:17]; //33:0
+wire fir_ready;
+fir_compiler_0 inst_fir (
+    .aclk(sysclk_buf),
+    .s_axis_data_tvalid(iq_ready),
+    .s_axis_data_tdata({sq, si}),
+    .m_axis_data_tdata(fir_out),
+    .m_axis_data_tvalid(fir_ready)
+);
+
+wire signed [15:0] cordic_out;
+wire cordic_ready;
+cordic_0 inst_cordic (
+    .aclk(sysclk_buf),
+    .s_axis_cartesian_tdata({fsq, fsi}),
+    .s_axis_cartesian_tvalid(fir_ready),
+    .m_axis_dout_tdata(cordic_out),
+    .m_axis_dout_tvalid(cordic_ready)
+);
+
+// CORDIC Phase_Format = Scaled_Radians: cordic_out = phase/pi, fix16_13 (+-8192)
+wire signed [15:0] phase16 = {cordic_out[13:0], 2'b00};  // +-pi -> +-32768, wraps for free
+reg  signed [15:0] phase_prev = 0;
+reg  signed [15:0] freq;          // 1 LSB = FS/65536 = 14.7 Hz; +-75 kHz -> +-5100
+always @(posedge sysclk_buf) if (cordic_ready) begin
+    freq       <= phase16 - phase_prev;
+    phase_prev <= phase16;
+end
 
 /*
 blk_mem_gen_0 instance_bram (
@@ -133,12 +173,27 @@ always @(posedge sysclk_buf) begin : p1
     end
 end
 */
-reg signed [40:0] mul_res;
+
+/*
+reg signed [31:0] mul_res;
 always @(posedge sysclk_buf) begin : p1
     //if (write_done || (!fir_valid)) disable p1;
     if (write_done || (!dc_ready)) disable p1;
-    mul_res <= dds_cos *  filter_out;
-    inferred_ram[mem_addr] <= dc_out;//filter_out;//xadc_signed[16:1];//mul_res[40:40-15];
+    //mul_res <= dds_cos *  filter_out;
+    mul_res <= dds_cos *  dc_out;
+    inferred_ram[mem_addr] <= mul_res[31:31-15];//filter_out;//xadc_signed[16:1];//mul_res[40:40-15];
+    // Read port keeps the RAM from being optimized away; like the write it
+    // stops after write_done, so the BRAM is idle during config readback.
+    ram_dout <= inferred_ram[mem_addr];
+    mem_addr <= mem_addr + 1;
+    if (mem_addr == 18'h3FFFF) begin
+        write_done <= 1;
+    end
+end
+*/
+always @(posedge sysclk_buf) begin : p1
+    if (write_done || (!cordic_ready)) disable p1;
+    inferred_ram[mem_addr] <= freq;//fsi;//freq;//cordic_out;
     // Read port keeps the RAM from being optimized away; like the write it
     // stops after write_done, so the BRAM is idle during config readback.
     ram_dout <= inferred_ram[mem_addr];
