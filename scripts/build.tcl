@@ -10,6 +10,8 @@
 # location file) and output/LO_bram_map.csv, used by bram_dump.bat to
 # decode BRAM contents from a configuration readback.
 
+set start_time [clock seconds]
+
 set jobs 4
 if {$argc > 0} { set jobs [lindex $argv 0] }
 
@@ -89,3 +91,6 @@ puts "BRAM map: [llength $rams] primitives -> [file join $out_dir ${top}_bram_ma
 
 close_project
 puts "Bitstream written to [file join $out_dir ${top}.bit]"
+
+set elapsed [expr {[clock seconds] - $start_time}]
+puts [format "Build finished: %d jobs, %d:%02d elapsed" $jobs [expr {$elapsed / 60}] [expr {$elapsed % 60}]]
