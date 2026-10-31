@@ -28,7 +28,7 @@ module make_iq(
     input signed [15:0] in_msin,
     output wire signed [15:0] out_i,
     output wire signed [15:0] out_q,
-    output reg out_ready
+    output reg out_valid
 );
     reg signed [31:0] long_i;
     reg signed [31:0] long_q;
@@ -36,7 +36,7 @@ module make_iq(
     assign out_q = long_q[30:30-15];
 
     always @(posedge clk) begin : p1
-        out_ready <= in_valid;
+        out_valid <= in_valid;
         if (!in_valid) disable p1;
         long_i <= in_signal * in_cos;
         long_q <= in_signal * in_msin;

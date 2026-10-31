@@ -19,3 +19,6 @@ zybo-fm-radio.Xil/
 *.bit
 *.bin
 *.rpt
+
+# Command-line build output
+output/

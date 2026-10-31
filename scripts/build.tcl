@@ -4,11 +4,12 @@
 #   vivado -mode batch -source scripts/build.tcl [-tclargs <jobs>]
 # or just run build.bat.
 #
-# Opens the existing project, regenerates IP output products, runs
-# synthesis + implementation through write_bitstream, and copies the
-# resulting bitstream to output/LO.bit. Also writes output/LO.ll (logic
-# location file) and output/LO_bram_map.csv, used by bram_dump.bat to
-# decode BRAM contents from a configuration readback.
+# Opens the existing project, regenerates IP and block-design output
+# products, runs synthesis + implementation through write_bitstream, and
+# copies the resulting bitstream to output/LO.bit. Also exports the hardware
+# platform (output/LO.xsa, bitstream included) for PetaLinux / Vitis.
+# Samples leave the PL through the AXI4-Stream FIFO in design_1 and are
+# collected on PetaLinux with capture.bat.
 
 set start_time [clock seconds]
 
@@ -23,21 +24,29 @@ set out_dir    [file join $repo_dir output]
 open_project $xpr
 
 # Drop outputs of the previous build so a failed build cannot leave a stale
-# BRAM map next to a fresh .ll (bram_dump.bat would then decode garbage).
-foreach f {LO.bit LO.ll LO.ll.bram_cache LO_bram_map.csv} {
+# bitstream behind to be programmed by mistake.
+foreach f {LO.bit LO.xsa} {
     file delete -force [file join $out_dir $f]
 }
 
-# Make sure IP cores (clk_wiz_0, clk_station) are current and have output products.
-set ips [get_ips -quiet]
+# Make sure the stand-alone IP cores (clk_wiz_0, xadc_wiz_0, dds, fir, cordic)
+# are current and have output products. IP inside a block design has
+# SCOPE = its .bd file and is handled with the block design below.
+set ips [get_ips -quiet -filter {SCOPE == ""}]
 if {[llength $ips] > 0} {
     upgrade_ip -quiet $ips
     generate_target all $ips
 }
 
-# Logic location file (.ll): maps every BRAM bit to its position in the
-# configuration data, for decoding readbacks.
-set_property STEPS.WRITE_BITSTREAM.ARGS.LOGIC_LOCATION_FILE true [get_runs impl_1]
+# Block design (PS7 + AXI4-Stream FIFO): regenerate its output products and
+# the HDL wrapper LO instantiates, so the wrapper ports always match the BD.
+foreach bd [get_files -quiet *.bd] {
+    set bd_ips [get_ips -quiet -filter "SCOPE == \"$bd\""]
+    if {[llength $bd_ips] > 0} { upgrade_ip -quiet $bd_ips }
+    generate_target all $bd
+    make_wrapper -files $bd -top -force
+}
+update_compile_order -fileset sources_1
 
 # Full clean rebuild of the top-level runs.
 reset_run synth_1
@@ -60,7 +69,6 @@ set top [get_property TOP [current_fileset]]
 set bit [file join [get_property DIRECTORY [get_runs impl_1]] ${top}.bit]
 file mkdir $out_dir
 file copy -force $bit [file join $out_dir ${top}.bit]
-file copy -force [file rootname $bit].ll [file join $out_dir ${top}.ll]
 
 # Timing summary so failures to meet timing are visible from the console.
 open_run impl_1
@@ -75,19 +83,8 @@ if {$wns ne "" && $wns < 0} {
     puts "WARNING: design does not meet timing."
 }
 
-# Placement and logical mapping of the inferred capture RAM, one row per
-# BRAM primitive: which address range and data bits it holds.
-set rams [get_cells -hierarchical -filter {PRIMITIVE_GROUP == BMEM && RTL_RAM_NAME =~ *inferred_ram*}]
-if {[llength $rams] == 0} {
-    error "No BRAM primitives for inferred_ram found — was the RAM optimized away?"
-}
-set f [open [file join $out_dir ${top}_bram_map.csv] w]
-puts $f "loc,width,addr_begin,addr_end,slice_begin,slice_end"
-foreach c [lsort -dictionary $rams] {
-    puts $f [join [list [get_property LOC $c] [get_property READ_WIDTH_A $c]         [get_property ram_addr_begin $c] [get_property ram_addr_end $c]         [get_property ram_slice_begin $c] [get_property ram_slice_end $c]] ,]
-}
-close $f
-puts "BRAM map: [llength $rams] primitives -> [file join $out_dir ${top}_bram_map.csv]"
+# Hardware handoff for PetaLinux / Vitis: address map, PS7 config, bitstream.
+write_hw_platform -fixed -include_bit -force [file join $out_dir ${top}.xsa]
 
 close_project
 puts "Bitstream written to [file join $out_dir ${top}.bit]"

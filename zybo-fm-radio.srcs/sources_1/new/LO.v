@@ -25,8 +25,63 @@ module LO(
     input  [3:0] btn,   // btn[0] = increment level, btn[1] = decrement level
     input  vauxp14, vauxn14,
     output [3:0] led,   // shows current level on the user LEDs
-    output [3:1] je
+    output [3:1] je,
+    // PS7 DDR and fixed MIO pins, passed straight through to design_1_wrapper.
+    // Each needs its own direction: a bare name would inherit "output [3:1]" from je.
+    inout [14:0] DDR_addr,
+    inout [2:0]  DDR_ba,
+    inout        DDR_cas_n,
+    inout        DDR_ck_n,
+    inout        DDR_ck_p,
+    inout        DDR_cke,
+    inout        DDR_cs_n,
+    inout [3:0]  DDR_dm,
+    inout [31:0] DDR_dq,
+    inout [3:0]  DDR_dqs_n,
+    inout [3:0]  DDR_dqs_p,
+    inout        DDR_odt,
+    inout        DDR_ras_n,
+    inout        DDR_reset_n,
+    inout        DDR_we_n,
+    inout        FIXED_IO_ddr_vrn,
+    inout        FIXED_IO_ddr_vrp,
+    inout [53:0] FIXED_IO_mio,
+    inout        FIXED_IO_ps_clk,
+    inout        FIXED_IO_ps_porb,
+    inout        FIXED_IO_ps_srstb
     );
+
+wire [15:0]S_AXIS_0_tdata;      // non 1-bit wires must be forwrd declared
+design_1_wrapper inst_system
+       (.DDR_addr(DDR_addr),
+        .DDR_ba(DDR_ba),
+        .DDR_cas_n(DDR_cas_n),
+        .DDR_ck_n(DDR_ck_n),
+        .DDR_ck_p(DDR_ck_p),
+        .DDR_cke(DDR_cke),
+        .DDR_cs_n(DDR_cs_n),
+        .DDR_dm(DDR_dm),
+        .DDR_dq(DDR_dq),
+        .DDR_dqs_n(DDR_dqs_n),
+        .DDR_dqs_p(DDR_dqs_p),
+        .DDR_odt(DDR_odt),
+        .DDR_ras_n(DDR_ras_n),
+        .DDR_reset_n(DDR_reset_n),
+        .DDR_we_n(DDR_we_n),
+        .FIXED_IO_ddr_vrn(FIXED_IO_ddr_vrn),
+        .FIXED_IO_ddr_vrp(FIXED_IO_ddr_vrp),
+        .FIXED_IO_mio(FIXED_IO_mio),
+        .FIXED_IO_ps_clk(FIXED_IO_ps_clk),
+        .FIXED_IO_ps_porb(FIXED_IO_ps_porb),
+        .FIXED_IO_ps_srstb(FIXED_IO_ps_srstb),
+        //----
+        .S_AXIS_0_tdata(S_AXIS_0_tdata),
+        .S_AXIS_0_tlast(S_AXIS_0_tlast),
+        .S_AXIS_0_tready(S_AXIS_0_tready),
+        .S_AXIS_0_tvalid(S_AXIS_0_tvalid),
+        .aclk_gp0_50mhz(aclk_gp0_50mhz)
+        );
+
 
 reg count = 0;
 //assign je[3] = count;
@@ -48,8 +103,8 @@ clk_wiz_0 instance_clk_wiz_0 (
 wire xadc_eoc, xadc_drdy;
 wire [15:0] xadc_do;
 wire signed [16:0] xadc_signed = {1'b0, xadc_do};
-xadc_wiz_0 instance_xadc (
-        .dclk_in(sysclk_buf),
+xadc_wiz_0 instance_xadc (                              // TODO: currently in DRP mode, AXI4-Stream is probably better
+        .dclk_in(aclk_gp0_50mhz),
         .vauxp14(vauxp14),
         .vauxn14(vauxn14),
         .eoc_out(xadc_eoc),
@@ -60,19 +115,19 @@ xadc_wiz_0 instance_xadc (
     );
 
 wire signed [15:0] dc_out;
-wire dc_ready;
+wire dc_valid;
 dc_filter inst_dc_filter(
-    .clk(sysclk_buf),
+    .clk(aclk_gp0_50mhz),
     .in_valid(xadc_drdy),
     .x0(xadc_signed[16:1]),
     .y1(dc_out),
-    .dc_ready(dc_ready)
+    .dc_valid(dc_valid)
 );
 
 
 wire signed [15:0] dds_cos, dds_msin;
 dds_compiler_0 inst_dds (
-    .aclk(xadc_eoc),                        // TODO: what is aclk? (why "a")
+    .aclk(xadc_eoc),                        // TODO: maybe xadc_drdy?
     .m_axis_data_tdata({dds_msin, dds_cos})
 );
 
@@ -85,112 +140,92 @@ wire signed [15:0] sq = long_q[31:31-15];
 
 wire signed [15:0] si;
 wire signed [15:0] sq;
-wire iq_ready;
+wire iq_valid;
 make_iq inst_make_iq (
-    .clk(sysclk_buf),
-    .in_valid(dc_ready),
+    .clk(aclk_gp0_50mhz),
+    .in_valid(dc_valid),
     .in_signal(dc_out),
     .in_cos(dds_cos),
     .in_msin(dds_msin),
     .out_i(si),
     .out_q(sq),
-    .out_ready(iq_ready)
+    .out_valid(iq_valid)
 );
 
 wire [73:0] fir_out;
 wire signed [15:0] fsq = fir_out[40+17+15:40+17]; //73:40
 wire signed [15:0] fsi = fir_out[17+15:17]; //33:0
-wire fir_ready;
+wire fir_valid;
 fir_compiler_0 inst_fir (
-    .aclk(sysclk_buf),
-    .s_axis_data_tvalid(iq_ready),
+    .aclk(aclk_gp0_50mhz),
+    .s_axis_data_tvalid(iq_valid),
     .s_axis_data_tdata({sq, si}),
     .m_axis_data_tdata(fir_out),
-    .m_axis_data_tvalid(fir_ready)
+    .m_axis_data_tvalid(fir_valid)
 );
 
 wire signed [15:0] cordic_out;
-wire cordic_ready;
+wire cordic_valid;
 cordic_0 inst_cordic (
-    .aclk(sysclk_buf),
+    .aclk(aclk_gp0_50mhz),
     .s_axis_cartesian_tdata({fsq, fsi}),
-    .s_axis_cartesian_tvalid(fir_ready),
+    .s_axis_cartesian_tvalid(fir_valid),
     .m_axis_dout_tdata(cordic_out),
-    .m_axis_dout_tvalid(cordic_ready)
+    .m_axis_dout_tvalid(cordic_valid)
 );
 
 // CORDIC Phase_Format = Scaled_Radians: cordic_out = phase/pi, fix16_13 (+-8192)
 wire signed [15:0] phase16 = {cordic_out[13:0], 2'b00};  // +-pi -> +-32768, wraps for free
 reg  signed [15:0] phase_prev = 0;
 reg  signed [15:0] freq;          // 1 LSB = FS/65536 = 14.7 Hz; +-75 kHz -> +-5100
-always @(posedge sysclk_buf) if (cordic_ready) begin
-    freq       <= phase16 - phase_prev;
-    phase_prev <= phase16;
+reg freq_valid = 0;
+always @(posedge aclk_gp0_50mhz) begin
+    freq_valid <= cordic_valid;
+    if (cordic_valid) begin
+        freq       <= phase16 - phase_prev;
+        phase_prev <= phase16;
+    end
 end
 
 /*
-blk_mem_gen_0 instance_bram (
-        .addra(mem_addr),
-        .clka(sysclk_buf),
-        .dina(mem_data),
-        //.douta(15:0),
-        .ena(1),
-        .wea(do_write)
-    );
-    
- reg [17:0] mem_addr = 0;
- reg write_done = 0;
- reg [15:0] mem_data;
- reg do_write = 0;
-
-always @(posedge sysclk_buf) begin : p1
-    if (write_done) disable p1;
-    mem_data <= mem_addr[15:0];
-    mem_addr <= mem_addr + 1;
-    do_write <= 1;
-    if (mem_addr == 18'h3FFFF) begin
-        write_done <= 1;
-        do_write <= 0;
+  input [15:0]S_AXIS_0_tdata;
+  output S_AXIS_0_tready;
+  input S_AXIS_0_tvalid;
+  output aclk_gp0_50mhz;
+*/
+/*        
+reg S_AXIS_0_tvalid_reg;
+S_AXIS_0_tvalid = S_AXIS_0_tvalid_reg;
+always @(posedge aclk_gp0_50mhz) begin
+    S_AXIS_0_tvalid_reg <= freq_valid;
+    if (freq_valid) begin
+        S_AXIS_0_tdata <= freq;
     end
 end
 */
+assign S_AXIS_0_tvalid = freq_valid;
+assign S_AXIS_0_tdata = freq;
+reg [6:0] fifo_counter = 1;
+reg  tlast_reg = 0;
+assign S_AXIS_0_tlast = tlast_reg;
 
+always @(posedge aclk_gp0_50mhz) begin
+    if (S_AXIS_0_tvalid) begin
+        fifo_counter <= fifo_counter + 1;
+        if (fifo_counter == 0)
+            tlast_reg <= 1;
+        else
+            tlast_reg <= 0;
+    end
+end
+ 
+
+/*
 (* ram_style = "block" *) reg [15:0] inferred_ram[0:262143];
 reg [17:0] mem_addr = 0;
 reg write_done = 0;
 reg [15:0] ram_dout;
 
-/*
-always @(posedge sysclk_buf) begin : p1
-    if (write_done) disable p1;
-    inferred_ram[mem_addr] <= mem_addr[15:0];
-    // Read port keeps the RAM from being optimized away; like the write it
-    // stops after write_done, so the BRAM is idle during config readback.
-    ram_dout <= inferred_ram[mem_addr];
-    mem_addr <= mem_addr + 1;
-    if (mem_addr == 18'h3FFFF) begin
-        write_done <= 1;
-    end
-end
-*/
-
-/*
-reg signed [31:0] mul_res;
-always @(posedge sysclk_buf) begin : p1
-    //if (write_done || (!fir_valid)) disable p1;
-    if (write_done || (!dc_ready)) disable p1;
-    //mul_res <= dds_cos *  filter_out;
-    mul_res <= dds_cos *  dc_out;
-    inferred_ram[mem_addr] <= mul_res[31:31-15];//filter_out;//xadc_signed[16:1];//mul_res[40:40-15];
-    // Read port keeps the RAM from being optimized away; like the write it
-    // stops after write_done, so the BRAM is idle during config readback.
-    ram_dout <= inferred_ram[mem_addr];
-    mem_addr <= mem_addr + 1;
-    if (mem_addr == 18'h3FFFF) begin
-        write_done <= 1;
-    end
-end
-*/
 always @(posedge sysclk_buf) begin : p1
     if (write_done || (!cordic_ready)) disable p1;
     inferred_ram[mem_addr] <= freq;//fsi;//freq;//cordic_out;
@@ -202,11 +237,13 @@ always @(posedge sysclk_buf) begin : p1
         write_done <= 1;
     end
 end
+*/
 
-
+/*
 assign led[0] = write_done;
 assign led[1] = ^ram_dout;
 assign led[3:2] = 2'b00;
+*/
 
 
 /*
