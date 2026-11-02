@@ -49,9 +49,9 @@ module LO(
     inout        FIXED_IO_ps_clk,
     inout        FIXED_IO_ps_porb,
     inout        FIXED_IO_ps_srstb
-    );
+);
 
-wire [15:0]S_AXIS_0_tdata;      // non 1-bit wires must be forwrd declared
+wire [15:0] S_AXIS_0_tdata;      // non 1-bit wires must be forwrd declared
 design_1_wrapper inst_system
        (.DDR_addr(DDR_addr),
         .DDR_ba(DDR_ba),
@@ -174,6 +174,10 @@ cordic_0 inst_cordic (
     .m_axis_dout_tvalid(cordic_valid)
 );
 
+assign S_AXIS_0_tdata = {cordic_out[13:0], 2'b00};
+assign S_AXIS_0_tvalid = cordic_valid;
+
+/*
 // CORDIC Phase_Format = Scaled_Radians: cordic_out = phase/pi, fix16_13 (+-8192)
 wire signed [15:0] phase16 = {cordic_out[13:0], 2'b00};  // +-pi -> +-32768, wraps for free
 reg  signed [15:0] phase_prev = 0;
@@ -186,37 +190,18 @@ always @(posedge aclk_gp0_50mhz) begin
         phase_prev <= phase16;
     end
 end
+*/
 
-/*
-  input [15:0]S_AXIS_0_tdata;
-  output S_AXIS_0_tready;
-  input S_AXIS_0_tvalid;
-  output aclk_gp0_50mhz;
-*/
-/*        
-reg S_AXIS_0_tvalid_reg;
-S_AXIS_0_tvalid = S_AXIS_0_tvalid_reg;
-always @(posedge aclk_gp0_50mhz) begin
-    S_AXIS_0_tvalid_reg <= freq_valid;
-    if (freq_valid) begin
-        S_AXIS_0_tdata <= freq;
-    end
-end
-*/
-assign S_AXIS_0_tvalid = freq_valid;
-assign S_AXIS_0_tdata = freq;
 reg [6:0] fifo_counter = 1;
 reg  tlast_reg = 0;
 assign S_AXIS_0_tlast = tlast_reg;
 
-always @(posedge aclk_gp0_50mhz) begin
-    if (S_AXIS_0_tvalid) begin
-        fifo_counter <= fifo_counter + 1;
-        if (fifo_counter == 0)
-            tlast_reg <= 1;
-        else
-            tlast_reg <= 0;
-    end
+always @(posedge aclk_gp0_50mhz) if (S_AXIS_0_tvalid) begin
+    fifo_counter <= fifo_counter + 1;
+    if (fifo_counter == 0)
+        tlast_reg <= 1;
+    else
+        tlast_reg <= 0;
 end
  
 
