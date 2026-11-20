@@ -51,7 +51,7 @@ module LO(
     inout        FIXED_IO_ps_srstb
 );
 
-wire [15:0] S_AXIS_0_tdata;      // non 1-bit wires must be forwrd declared
+wire [31:0] S_AXIS_0_tdata;      // non 1-bit wires must be forwrd declared
 design_1_wrapper inst_system
        (.DDR_addr(DDR_addr),
         .DDR_ba(DDR_ba),
@@ -109,7 +109,7 @@ xadc_wiz_0 instance_xadc (                              // TODO: currently in DR
         .vauxn14(vauxn14),
         .eoc_out(xadc_eoc),
         .daddr_in(7'h1e),
-        .den_in(xadc_eoc),
+        .den_in(xadc_eoc),             // 961538 Hz
         .drdy_out(xadc_drdy),
         .do_out(xadc_do)
     );
@@ -168,26 +168,127 @@ cordic_0 inst_cordic (
     .m_axis_dout_tvalid(cordic_tvalid)
 );
 
-`define A4S_PREV cordic
-`define A4S_NEXT S_AXIS_0
-`define A4S(bus, sig) bus``_``sig
+
+`define A4S_PREV(sig) cordic_``sig
+`define A4S_NEXT(sig) S_AXIS_0_``sig
+wire signed [15:0] phase_to_freq_data;
 phase_to_freq i_phase_to_freq (
     .aclk(aclk_gp0_50mhz),
-    .s_axis_tvalid(`A4S(`A4S_PREV, tvalid)),
-    .s_axis_tlast(`A4S(`A4S_PREV, tlast)),
+    .s_axis_tvalid(`A4S_PREV(tvalid)),
+    //.s_axis_tlast(`A4S_PREV(tlast)),
     .s_axis_tdata({cordic_tdata[13:0], 2'b00}),
-    .m_axis_tvalid(`A4S(`A4S_NEXT, tvalid)),
-    .m_axis_tlast(`A4S(`A4S_NEXT, tlast)),
-    .m_axis_tdata(`A4S(`A4S_NEXT, tdata))
+    //.m_axis_tvalid(`A4S(`A4S_NEXT, tvalid)),
+    //.m_axis_tlast(`A4S(`A4S_NEXT, tlast)),
+    //.m_axis_tdata(`A4S(`A4S_NEXT, tdata))
+    .m_axis_tdata(phase_to_freq_data)
 );
+
+`define A4S_NEXT(sig) S_AXIS_0_``sig
+wire signed [7:0] pilot_cos;
+wire signed [7:0] pilot_sin;
+dds_pilot i_dds_pilot (
+    .aclk(fir_valid),                               // fir_valid is 320513 Hz, xadc_eoc is 961538 Hz
+    //.m_axis_phase_tdata(`A4S(`A4S_NEXT, tdata))   // inc: 111100101101 -> 65536/320513*19000 ~= 3885, 
+    .m_axis_data_tdata({pilot_sin, pilot_cos})
+);
+reg i_dds_pilot_tvalid;
+reg signed [23:0] pilot_mult;
+always @(posedge aclk_gp0_50mhz) begin
+    i_dds_pilot_tvalid <= fir_valid;
+    if (i_dds_pilot_tvalid)
+        pilot_mult <= phase_to_freq_data * pilot_cos;
+end
+
+//pilot digital
+localparam PHASE_MSB = 16+2-1;
+reg [PHASE_MSB:0] pilot_phase = 0;
+wire pilot_dout = pilot_phase[PHASE_MSB];
+reg signed [PHASE_MSB:0] pilot_vco = 0;               // 3886 -> 19005
+always @(posedge aclk_gp0_50mhz) if (fir_valid) begin
+    pilot_phase <= pilot_phase + (3885+1)*4 + pilot_vco;
+end
+
+reg dmult_tvalid = 0;
+reg signed [15:0] pilot_dmult;
+always @(posedge aclk_gp0_50mhz) begin
+    dmult_tvalid <= fir_valid;
+    if (fir_valid) begin
+        if (pilot_dout)
+            pilot_dmult <= phase_to_freq_data;
+        else
+            pilot_dmult <= -phase_to_freq_data;
+    end
+end
+
+wire cic_tvalid;
+wire signed [15:0] cic_tdata;
+cic_19k_pll i_cic_19k_pll (
+    .aclk(aclk_gp0_50mhz),
+    .s_axis_data_tvalid(dmult_tvalid),
+    .s_axis_data_tdata(pilot_dmult),
+    .m_axis_data_tvalid(cic_tvalid),
+    .m_axis_data_tdata(cic_tdata)
+);
+
+reg signed [31:0] PD_int = 0;
+wire signed [7:0] PD_int_top = PD_int[31 -:8];
+always @(posedge aclk_gp0_50mhz) begin  // -822 / 807 -> +/- 1000
+    if (cic_tvalid) begin
+        pilot_vco <= PD_int_top - (cic_tdata / (512/4));   // Proportional part
+        PD_int <= PD_int - cic_tdata*2*256;                // Integral part ( PD_int_top4 = PD_int >> 24  )
+    end
+end
+
+wire signed [15:0] pilot_sincos_tdata;
+pilot_sincos i_pilot_sincos (
+    .aclk(aclk_gp0_50mhz),
+    .s_axis_phase_tvalid(dmult_tvalid),
+    .s_axis_phase_tdata(pilot_phase[PHASE_MSB -: 16]),
+    //.m_axis_data_tvalid(cic_tvalid),
+    .m_axis_data_tdata(pilot_sincos_tdata)
+);
+
+//assign S_AXIS_0_tdata[15:0] = {pilot_sincos_tdata[15:8], 8'd0};          // L - dpilot
+//assign S_AXIS_0_tdata[31:16] = phase_to_freq_data;  // R - audio
+//assign S_AXIS_0_tvalid = i_dds_pilot_tvalid;
+
+// pll error
+assign S_AXIS_0_tdata[15:0] = cic_tdata;          // L - dpilot
+assign S_AXIS_0_tdata[31:16] = phase_to_freq_data;  // R - audio
+assign S_AXIS_0_tvalid = i_dds_pilot_tvalid;
+
+// digital 19k*audio, audio
+//assign S_AXIS_0_tdata[15:0] = pilot_dmult;          // L - dpilot
+//assign S_AXIS_0_tdata[31:16] = phase_to_freq_data;  // R - audio
+//assign S_AXIS_0_tvalid = i_dds_pilot_tvalid;
+
+// analog 19k*audio, audio
+//assign S_AXIS_0_tdata[15:0] = pilot_mult[23:8];     // L - pilot*audio
+//assign S_AXIS_0_tdata[31:16] = phase_to_freq_data;  // R - audio
+//assign S_AXIS_0_tvalid = i_dds_pilot_tvalid;
+
+// works great! (analog 19k, audio)
+//assign S_AXIS_0_tdata[15:0] = {pilot_cos, 8'b0};
+//assign S_AXIS_0_tdata[31:16] = phase_to_freq_data;
+//assign S_AXIS_0_tvalid = i_dds_pilot_tvalid;
+
+//assign S_AXIS_0_tdata = xadc_do;
+//assign S_AXIS_0_tvalid = xadc_drdy;
+
+//assign S_AXIS_0_tdata = dc_out;
+//assign S_AXIS_0_tvalid = dc_valid;
 
 //assign S_AXIS_0_tdata = {cordic_out[13:0], 2'b00};
 //assign S_AXIS_0_tvalid = cordic_valid;
 
+//wire signed [15:0] pilot_cos16 = pilot_cos;
+//assign S_AXIS_0_tdata = pilot_cos16;
+//assign S_AXIS_0_tvalid = i_dds_pilot_tvalid;
+
+
 reg [6:0] fifo_counter = 1;
 reg  tlast_reg = 0;
-//assign S_AXIS_0_tlast = tlast_reg;
-assign cordic_tlast = tlast_reg;
+assign S_AXIS_0_tlast = tlast_reg;
 
 always @(posedge aclk_gp0_50mhz) if (S_AXIS_0_tvalid) begin
     fifo_counter <= fifo_counter + 1;

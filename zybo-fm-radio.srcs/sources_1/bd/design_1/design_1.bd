@@ -1,7 +1,7 @@
 {
   "design": {
     "design_info": {
-      "boundary_crc": "0x34158A2F8C7FBE30",
+      "boundary_crc": "0x3A3DC86AE45FFAF",
       "device": "xc7z020clg400-1",
       "gen_directory": "../../../../zybo-fm-radio.gen/sources_1/bd/design_1",
       "name": "design_1",
@@ -1566,7 +1566,7 @@
             "value": "4"
           },
           "S_TDATA_NUM_BYTES": {
-            "value": "2"
+            "value": "4"
           }
         }
       }
